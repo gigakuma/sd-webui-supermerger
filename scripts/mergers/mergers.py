@@ -285,9 +285,17 @@ NUM_MID_BLOCK = 1
 NUM_OUTPUT_BLOCKS = 12
 NUM_TOTAL_BLOCKS = NUM_INPUT_BLOCKS + NUM_MID_BLOCK + NUM_OUTPUT_BLOCKS
 
-def mergen(weights_a,weights_b, model_a, model_b,model_c, device="cpu", base_alpha=0.5,base_beta=0.25, output_file="",mode="Weight", 
-overwrite=False,save=True,useblocks=False,prompt="none", nprompt="", steps=20, sampler=0, cfg=8, seed=-1, w=512, h=512,
-currentmodel=""):
+# skip_position_ids: https://github.com/bbc-mc/sdweb-merge-block-weighted-gui
+def mergen(
+    weights_a, weights_b,
+    model_a, model_b, model_c,
+    device="cpu",
+    base_alpha=0.5, base_beta=0.25,
+    output_file="", mode="Weight",
+    overwrite=False, save=True, useblocks=False, skip_position_ids=1,
+    prompt="none", nprompt="", steps=20, sampler=0, cfg=8, seed=-1, w=512, h=512,
+    currentmodel=""
+):
     caster("merge start",hearm)
     modes=["Weight" ,"Add" ,"Triple","Twice"]
     global hear
@@ -295,7 +303,7 @@ currentmodel=""):
     gc.collect()
 
     usebeta = modes[2] in mode or modes[3] in mode
-    mergedmodel = [weights_a,weights_b,model_a, model_b,model_c, device, base_alpha,base_beta, output_file,mode, overwrite,True,useblocks].copy()
+    mergedmodel = [weights_a,weights_b,model_a,model_b,model_c,device,base_alpha,base_beta,output_file,mode,overwrite,True,useblocks,skip_position_ids].copy()
     caster(mergedmodel,True)
     if model_a =="" or model_b =="" or ((not modes[0] in mode) and model_c=="") : 
         return "ERROR: Necessary model is not selected",None,None,None,None,currentmodel
@@ -348,7 +356,11 @@ currentmodel=""):
             current_beta = beta
 
             if key in chckpoint_dict_skip_on_merge:
-                continue
+                if skip_position_ids == 1:
+                    continue
+                elif skip_position_ids == 2:
+                    theta_0[key] = torch.tensor([list(range(77))], dtype=torch.int64)
+                    continue
 
             # check weighted and U-Net or not
             if weights_a is not None and 'model.diffusion_model.' in key:
@@ -405,7 +417,11 @@ currentmodel=""):
 
     for key in tqdm(theta_1.keys(), desc="Stage 2/2"):
         if key in chckpoint_dict_skip_on_merge:
-            continue
+            if skip_position_ids == 1:
+                continue
+            elif skip_position_ids == 2:
+                theta_0[key] = torch.tensor([list(range(77))], dtype=torch.int64)
+                continue
         if "model" in key and key not in theta_0:
             theta_0.update({key:theta_1[key]})
             
