@@ -294,8 +294,7 @@ def mergen(
     output_file="", mode="Weight",
     overwrite=False, save=True, useblocks=False, skip_position_ids=1,
     prompt="none", nprompt="", steps=20, sampler=0, cfg=8, seed=-1, w=512, h=512,
-    currentmodel=""
-):
+    currentmodel=""):
     caster("merge start",hearm)
     modes=["Weight" ,"Add" ,"Triple","Twice"]
     global hear
@@ -477,8 +476,7 @@ def mergen(
 
 def savemerged(output_file,overwrite):
     global mergedmodel
-    print(mergedmodel)
-    if len(mergedmodel)!=13:
+    if len(mergedmodel)!=14:
         print(mergedmodel)
         return "ERROR:no info for merged model",None
     #    mergedmode = [0 weights_a,1 weights_b,2 model_a, 3 model_b, 4 model_c, 5 device, 6 base_alpha,7 base_beta, 8 output_file,9 mode,10 overwrite,11 True,12 useblocks]
@@ -628,9 +626,12 @@ def makegridmodelname(model_a, model_b,model_c, useblocks,mode,xtype,ytype,alpha
     return currentmodel
 
 def filenamecutter(name):
+    if type(name) is not str:
+        return ""
     if "ckpt" in name:name =name[:name.find('.ckpt')]
     if "safetensor" in name:name=name[:name.find('.safetensor')]
-    return name
+    # case: xxx\xxx.ckpt
+    return os.path.basename(name)
 
 path_root = scripts.basedir()
 
