@@ -210,8 +210,8 @@ def on_ui_tabs():
             )
 
             gen.click(
-                fn=wrap_gradio_gpu_call(runrun),
-                inputs=[dummy_component, *gensets.txt2img_preview_params,currentmodel],
+                fn=runrun,
+                inputs=[*gensets.txt2img_preview_params,currentmodel],
                 outputs=[merge_gallery,merge_generation_info,merge_html_info,merge_html_log],
             )
 
