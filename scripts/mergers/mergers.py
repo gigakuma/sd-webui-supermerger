@@ -287,6 +287,7 @@ NUM_TOTAL_BLOCKS = NUM_INPUT_BLOCKS + NUM_MID_BLOCK + NUM_OUTPUT_BLOCKS
 
 # skip_position_ids: https://github.com/bbc-mc/sdweb-merge-block-weighted-gui
 def mergen(
+    id_task,
     weights_a, weights_b,
     model_a, model_b, model_c,
     device="cpu",
@@ -296,7 +297,36 @@ def mergen(
     prompt="none", nprompt="", steps=20, sampler=0, cfg=8, seed=-1, w=512, h=512,
     currentmodel=""):
     caster("merge start",hearm)
-    modes=["Weight" ,"Add" ,"Triple","Twice"]
+    shared.state.begin()
+    shared.state.job = 'supermerger-mergen'
+
+    def fail(message):
+        shared.state.textinfo = message
+        shared.state.end()
+        if prompt != "none":
+            return currentmodel, None, None, None, None, message
+        else:
+            return currentmodel, message
+    
+    def progress_msg(message):
+        shared.state.textinfo = message
+    
+    def progress_set_total(total):
+        shared.state.sampling_steps = total
+    
+    def progress_reset():
+        shared.state.sampling_step = 0
+
+    def progress_inc(d=1):
+        shared.state.sampling_step += d
+
+    def progress_set_jobs(jobs):
+        shared.state.job_count = jobs
+
+    def progress_next_job():
+        shared.state.nextjob()
+
+    modes=["Weight", "Add", "Triple", "Twice"]
     global hear
     global mergedmodel
     gc.collect()
@@ -304,39 +334,43 @@ def mergen(
     usebeta = modes[2] in mode or modes[3] in mode
     mergedmodel = [weights_a,weights_b,model_a,model_b,model_c,device,base_alpha,base_beta,output_file,mode,overwrite,True,useblocks,skip_position_ids].copy()
     caster(mergedmodel,True)
-    if model_a =="" or model_b =="" or ((not modes[0] in mode) and model_c=="") : 
-        return "ERROR: Necessary model is not selected",None,None,None,None,currentmodel
+    if model_a =="" or model_b =="" or ((not modes[0] in mode) and model_c==""):
+        return fail("ERROR: Necessary model is not selected")
     if useblocks:
         weights_a_t=weights_a.split(',',1)
         weights_b_t=weights_b.split(',',1)
         base_alpha  = float(weights_a_t[0])    
         weights_a = [float(w) for w in weights_a_t[1].split(',')]
         caster(f"from {weights_a_t}, alpha = {base_alpha},weights_a ={weights_a}",hearm)
-        if len(weights_a) != 25:return f"ERROR: weights alpha value must be {26}.",None,None,None,None,currentmodel
+        if len(weights_a) != 25:return fail(f"ERROR: weights alpha value must be {26}.")
         if usebeta:
             base_beta = float(weights_b_t[0]) 
             weights_b = [float(w) for w in weights_b_t[1].split(',')]
             caster(f"from {weights_b_t}, beta = {base_beta},weights_a ={weights_b}",hearm)
-            if len(weights_b) != 25: return f"ERROR: weights beta value must be {26}.",None,None,None,None,currentmodel
+            if len(weights_b) != 25: return fail(f"ERROR: weights beta value must be {26}.")
 
     device = device if device in ["cpu", "cuda"] else "cpu"
     caster("model load start",hearm)
+    progress_msg(f"Loading model B ({model_b})")
     theta_1=load_model_weights_m(model_b,False,True,save).copy()
 
-    if modes[1] in mode:#Add
+    if modes[1] in mode: # Add
+        progress_msg(f"Loading model C ({model_c})")
         theta_2 = load_model_weights_m(model_c,False,False,save).copy()
         for key in tqdm(theta_1.keys()):
             if 'model' in key:
                 if key in theta_2:
                     t2 = theta_2.get(key, torch.zeros_like(theta_1[key]))
-                    theta_1[key] = theta_1[key]- t2
+                    theta_1[key] = theta_1[key] - t2
                 else:
                     theta_1[key] = torch.zeros_like(theta_1[key])
         del theta_2
 
+    progress_msg(f"Loading model A ({model_a})")
     theta_0=load_model_weights_m(model_a,True,False,save).copy()
 
-    if modes[2] in mode or modes[3] in mode:#Tripe or Twice
+    if modes[2] in mode or modes[3] in mode: # Tripe or Twice
+        progress_msg(f"Loading model C ({model_c})")
         theta_2 = load_model_weights_m(model_c,False,False,save).copy()
 
     alpha = base_alpha
@@ -349,16 +383,22 @@ def mergen(
     chckpoint_dict_skip_on_merge = ["cond_stage_model.transformer.text_model.embeddings.position_ids"]
 
     count_target_of_basealpha = 0
-    for key in (tqdm(theta_0.keys(), desc="Stage 1/2") if not False else theta_0.keys()):
+    progress_set_jobs(2)
+    progress_msg("Stage 1/2")
+    progress_set_total(len(theta_0.keys()))
+    progress_reset()
+    for key in tqdm(theta_0.keys(), desc="Stage 1/2"):
         if "model" in key and key in theta_1:
             current_alpha = alpha
             current_beta = beta
 
             if key in chckpoint_dict_skip_on_merge:
                 if skip_position_ids == 1:
+                    progress_inc()
                     continue
                 elif skip_position_ids == 2:
                     theta_0[key] = torch.tensor([list(range(77))], dtype=torch.int64)
+                    progress_inc()
                     continue
 
             # check weighted and U-Net or not
@@ -386,8 +426,7 @@ def mergen(
                                 weight_index = NUM_INPUT_BLOCKS + NUM_MID_BLOCK + out_idx
 
                 if weight_index >= NUM_TOTAL_BLOCKS:
-                    print(f"error. illegal block index: {key}")
-                    return "",None,None,None,None,None
+                    return fail(f"error. illegal block index: {key}")
                 
                 if weight_index >= 0 and useblocks:
                     current_alpha = weights_a[weight_index]
@@ -395,38 +434,48 @@ def mergen(
             else:
                 count_target_of_basealpha = count_target_of_basealpha + 1
 
-            if modes[1] in mode:#Add
+            if modes[1] in mode: # Add
                 caster(f"model A[{key}] +  {current_alpha} + * (model B - model C)[{key}]",hear)
                 theta_0[key] = theta_0[key] + current_alpha * theta_1[key]
-            elif modes[2] in mode:#Triple
+            elif modes[2] in mode: # Triple
                 caster(f"model A[{key}] +  {1-current_alpha-current_beta} +  model B[{key}]*{current_alpha} + model C[{key}]*{current_beta}",hear)
                 theta_0[key] = (1 - current_alpha-current_beta) * theta_0[key] + current_alpha * theta_1[key]+current_beta * theta_2[key]
-            elif modes[3] in mode:#Twice
+            elif modes[3] in mode: # Twice
                 caster(f"model A[{key}] +  {1-current_alpha} + * model B[{key}]*{alpha}",hear)
                 caster(f"model A+B[{key}] +  {1-current_beta} + * model C[{key}]*{beta}",hear)
                 theta_0[key] = (1 - current_alpha) * theta_0[key] + current_alpha * theta_1[key]
                 theta_0[key] = (1 - current_beta) * theta_0[key] + current_beta * theta_2[key]
-            else:#Weight
+            else: # Weight
                 if current_alpha == 1:
                     caster(f"alpha = 0,model A[{key}=model B[{key}",hear)
                     theta_0[key] = theta_1[key]
                 elif current_alpha !=0:
                     caster(f"model A[{key}] +  {1-current_alpha} + * (model B)[{key}]*{alpha}",hear)
                     theta_0[key] = (1 - current_alpha) * theta_0[key] + current_alpha * theta_1[key]
-
+        progress_inc()
+    progress_next_job()
+    progress_msg("Stage 2/2")
+    progress_set_total(len(theta_1.keys()))
+    progress_reset()
     for key in tqdm(theta_1.keys(), desc="Stage 2/2"):
         if key in chckpoint_dict_skip_on_merge:
             if skip_position_ids == 1:
+                progress_inc()
                 continue
             elif skip_position_ids == 2:
                 theta_0[key] = torch.tensor([list(range(77))], dtype=torch.int64)
+                progress_inc()
                 continue
         if "model" in key and key not in theta_0:
             theta_0.update({key:theta_1[key]})
-            
-    currentmodel = makemodelname(weights_a,weights_b,model_a, model_b,model_c, base_alpha,base_beta,useblocks,mode)
+        progress_inc()
+
+    progress_next_job()
+
+    currentmodel = makemodelname(weights_a,weights_b,model_a,model_b,model_c,base_alpha,base_beta,useblocks,mode)
     comments=""
 
+    progress_msg("Loading model to WebUI...")
     sd_hijack.model_hijack.undo_hijack(shared.sd_model)
     shared.sd_model.load_state_dict(theta_0, strict=False)
     
@@ -452,11 +501,14 @@ def mergen(
     savelog(currentmodel,mergedmodel)
     caster(mergedmodel,True)
     if save:
+        progress_msg("Saving model...")
         comments = savemodel(theta_0,currentmodel,output_file,overwrite)
+        progress_msg("Saved.")
     else:
         comments = "Merged model loaded:"+currentmodel
 
     def _setvae():
+        progress_msg("Load VAE from model")
         sd_vae.delete_base_vae()
         sd_vae.clear_loaded_vae()
         vae_file, vae_source = sd_vae.resolve_vae(model_a)
@@ -468,11 +520,13 @@ def mergen(
         print("ERROR:setting VAE skipped")
 
     gc.collect()
+    progress_msg("Done.")
+    shared.state.end()
     if prompt != "none":
         a,b,c,d = runrun(prompt, nprompt, steps, sampler, cfg, seed, w, h,currentmodel)
-        return comments,a,b,c,d,currentmodel
+        return currentmodel,a,b,c,d,comments
 
-    return comments,currentmodel
+    return currentmodel,comments
 
 def savemerged(output_file,overwrite):
     global mergedmodel

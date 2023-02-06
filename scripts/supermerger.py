@@ -21,9 +21,13 @@ from modules import shared, devices, sd_hijack, processing, sd_models, images, s
 from modules.ui import create_refresh_button, create_output_panel, plaintext_to_html
 from modules.shared import opts,state
 from modules.processing import create_infotext,Processed
-from modules.sd_models import  load_model,checkpoints_loaded,CheckpointInfo
+from modules.sd_models import  load_model, checkpoints_loaded, CheckpointInfo
+from modules.call_queue import wrap_gradio_gpu_call
+from scripts.mbw_util.preset_weights import PresetWeights
 
 gensets=argparse.Namespace()
+
+presetWeights = PresetWeights()
 
 def on_ui_train_tabs(params):
     txt2img_preview_params=params.txt2img_preview_params
@@ -32,6 +36,7 @@ def on_ui_train_tabs(params):
 
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as ui:
+        dummy_component = gr.Label(visible=False)
         with gr.Row().style(equal_height=False):
             with gr.Column(variant='panel'):
                 gr.HTML(value="<p>Merge models and load it for generation</p>")
@@ -55,6 +60,8 @@ def on_ui_tabs():
                     base_beta = gr.Slider(label="beta", minimum=-1.0, maximum=2, step=0.001, value=0.25)
                     #weights = gr.Textbox(label="weights,base alpha,IN00,IN02,...IN11,M00,OUT00,...,OUT11",lines=2,value="0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5")
                 with gr.Row():
+                    radio_position_ids = gr.Radio(label="Skip/Reset CLIP position_ids", choices=["None", "Skip", "Force Reset"], value="Skip", type="index")
+                with gr.Row():
                     with gr.Column(variant='panel'):
                         merge = gr.Button(elem_id="model_merger_merge", value="Merge!",variant='primary')
                         mergeandgen = gr.Button(elem_id="model_merger_merge", value="Merge And Gen",variant='primary')
@@ -64,6 +71,8 @@ def on_ui_tabs():
                     save = gr.Checkbox(label="save checkpoint after merge")
                     overwrite =  gr.Checkbox(label="allow overwrite")
                     custom_name = gr.Textbox(label="Custom Name (Optional)", elem_id="model_converter_custom_name")
+                with gr.Row():
+                    gr.HTML(value="<p>X/Y Plots</p>")
                 with gr.Row():
                     x_type = gr.Dropdown(label="X type", choices=[x for x in typesg], value="alpha", type="index")
                     x_randseednum = gr.Number(value=3, label="number of -1", interactive=True, visible = True)
@@ -79,8 +88,9 @@ def on_ui_tabs():
             blockid=["BASE","IN00","IN01","IN02","IN03","IN04","IN05","IN06","IN07","IN08","IN09","IN10","IN11","M00","OUT00","OUT01","OUT02","OUT03","OUT04","OUT05","OUT06","OUT07","OUT08","OUT09","OUT10","OUT11"]
     
             with gr.Column(variant='panel'):
-                currentmodel = gr.Textbox(label="Current Model",lines=1,value="")  
-                submit_result = gr.Textbox(label="Message")
+                currentmodel = gr.Textbox(label="Current Model",lines=1,value="")
+                with gr.Group(elem_id="supermerger_merge_panel"):
+                    submit_result = gr.HTML(elem_id="supermerger_merge_result", show_label=False)
                 merge_gallery, merge_generation_info, merge_html_info, merge_html_log = create_output_panel("txt2img", opts.outdir_txt2img_samples)
         with gr.Row():
             modelnames = gr.Textbox(label="",lines=2,value="",visible =False)
@@ -90,43 +100,49 @@ def on_ui_tabs():
             blockids = gr.CheckboxGroup(label = "checkpoint",choices=[x for x in blockid],type="value",interactive=True,visible = False)
         with gr.Row():
             checkpoints = gr.CheckboxGroup(label = "checkpoint",choices=[x.model_name for x in modules.sd_models.checkpoints_list.values()],type="value",interactive=True,visible = False)
-        with gr.Row():
-            addtoseq = gr.Button(elem_id="copytogen", value="Add weights to Sequence X",variant='primary')
-        with gr.Row():
-            weights_a = gr.Textbox(label="weights for alpha, base alpha,IN00,IN02,...IN11,M00,OUT00,...,OUT11",value = "0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5")
-            weights_b = gr.Textbox(label="weights,for beta, base beta,IN00,IN02,...IN11,M00,OUT00,...,OUT11",value = "0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2")
-        with gr.Row():
-            editweights = gr.Radio(label = "edit",choices = ["alpha","beta"], value = "alpha") 
-            base= gr.Slider(label="Base", minimum=0, maximum=1, step =0.01, value=0.5)
-            in00 = gr.Slider(label="IN00", minimum=0, maximum=1, step=0.01, value=0.5)
-            in01 = gr.Slider(label="IN01", minimum=0, maximum=1, step=0.01, value=0.5)
-            in02 = gr.Slider(label="IN02", minimum=0, maximum=1, step=0.01, value=0.5)
-            in03 = gr.Slider(label="IN03", minimum=0, maximum=1, step=0.01, value=0.5)
-        with gr.Row():
-            in04 = gr.Slider(label="IN04", minimum=0, maximum=1, step=0.01, value=0.5)
-            in05 = gr.Slider(label="IN05", minimum=0, maximum=1, step=0.01, value=0.5)
-            in06 = gr.Slider(label="IN06", minimum=0, maximum=1, step=0.01, value=0.5)
-            in07 = gr.Slider(label="IN07", minimum=0, maximum=1, step=0.01, value=0.5)
-            in08 = gr.Slider(label="IN08", minimum=0, maximum=1, step=0.01, value=0.5)
-            in09 = gr.Slider(label="IN09", minimum=0, maximum=1, step=0.01, value=0.5)
-        with gr.Row():
-            in10 = gr.Slider(label="IN10", minimum=0, maximum=1, step=0.01, value=0.5)
-            in11 = gr.Slider(label="IN11", minimum=0, maximum=1, step=0.01, value=0.5)
-            mi00 = gr.Slider(label="M00", minimum=0, maximum=1, step=0.01, value=0.5)
-            ou00 = gr.Slider(label="OUT00", minimum=0, maximum=1, step=0.01, value=0.5)
-            ou01 = gr.Slider(label="OUT01", minimum=0, maximum=1, step=0.01, value=0.5)
-            ou02 = gr.Slider(label="OUT02", minimum=0, maximum=1, step=0.01, value=0.5)
-        with gr.Row():
-            ou03 = gr.Slider(label="OUT03", minimum=0, maximum=1, step=0.01, value=0.5)
-            ou04 = gr.Slider(label="OUT04", minimum=0, maximum=1, step=0.01, value=0.5)
-            ou05 = gr.Slider(label="OUT05", minimum=0, maximum=1, step=0.01, value=0.5)
-            ou06 = gr.Slider(label="OUT06", minimum=0, maximum=1, step=0.01, value=0.5)
-            ou07 = gr.Slider(label="OUT07", minimum=0, maximum=1, step=0.01, value=0.5)
-            ou08 = gr.Slider(label="OUT08", minimum=0, maximum=1, step=0.01, value=0.5)
-        with gr.Row(): 
-            ou09 = gr.Slider(label="OUT09", minimum=0, maximum=1, step=0.01, value=0.5)       
-            ou10 = gr.Slider(label="OUT10", minimum=0, maximum=1, step=0.01, value=0.5)
-            ou11 = gr.Slider(label="OUT11", minimum=0, maximum=1, step=0.01, value=0.5)
+        with gr.Column(variant='panel'):
+            gr.HTML(value="<p>MBW (Merge block weighte)</p>")
+            with gr.Row():
+                addtoseq = gr.Button(elem_id="copytogen", value="Add weights to Sequence X",variant='primary')
+            with gr.Row():
+                weights_a = gr.Textbox(label="weights for alpha, base alpha,IN00,IN02,...IN11,M00,OUT00,...,OUT11",value = "0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5")
+                weights_b = gr.Textbox(label="weights,for beta, base beta,IN00,IN02,...IN11,M00,OUT00,...,OUT11",value = "0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2")
+            with gr.Row():
+                editweights = gr.Radio(label = "edit",choices = ["alpha","beta"], value = "alpha")
+                base= gr.Slider(label="Base", minimum=0, maximum=1, step =0.01, value=0.5)
+            with gr.Row():
+                with gr.Column():
+                    in00 = gr.Slider(label="IN00", minimum=0, maximum=1, step=0.01, value=0.5)
+                    in01 = gr.Slider(label="IN01", minimum=0, maximum=1, step=0.01, value=0.5)
+                    in02 = gr.Slider(label="IN02", minimum=0, maximum=1, step=0.01, value=0.5)
+                    in03 = gr.Slider(label="IN03", minimum=0, maximum=1, step=0.01, value=0.5)
+                    in04 = gr.Slider(label="IN04", minimum=0, maximum=1, step=0.01, value=0.5)
+                    in05 = gr.Slider(label="IN05", minimum=0, maximum=1, step=0.01, value=0.5)
+                    in06 = gr.Slider(label="IN06", minimum=0, maximum=1, step=0.01, value=0.5)
+                    in07 = gr.Slider(label="IN07", minimum=0, maximum=1, step=0.01, value=0.5)
+                    in08 = gr.Slider(label="IN08", minimum=0, maximum=1, step=0.01, value=0.5)
+                    in09 = gr.Slider(label="IN09", minimum=0, maximum=1, step=0.01, value=0.5)
+                    in10 = gr.Slider(label="IN10", minimum=0, maximum=1, step=0.01, value=0.5)
+                    in11 = gr.Slider(label="IN11", minimum=0, maximum=1, step=0.01, value=0.5)
+                with gr.Column():
+                    gr.HTML(value="<p>Presets</p>")
+                    dd_preset_weight = gr.Dropdown(label="Preset Weights", choices=presetWeights.get_preset_name_list())
+                    txt_block_weight = gr.Text(label="Weight_values", placeholder="Put weight sets. float number x 25")
+                    btn_apply_block_weithg_from_txt = gr.Button(value="Apply block weight from text", variant="primary")
+                    mi00 = gr.Slider(label="M00", minimum=0, maximum=1, step=0.01, value=0.5, elem_id="mi00")
+                with gr.Column():
+                    ou11 = gr.Slider(label="OUT11", minimum=0, maximum=1, step=0.01, value=0.5)
+                    ou10 = gr.Slider(label="OUT10", minimum=0, maximum=1, step=0.01, value=0.5)
+                    ou09 = gr.Slider(label="OUT09", minimum=0, maximum=1, step=0.01, value=0.5)
+                    ou08 = gr.Slider(label="OUT08", minimum=0, maximum=1, step=0.01, value=0.5)
+                    ou07 = gr.Slider(label="OUT07", minimum=0, maximum=1, step=0.01, value=0.5)
+                    ou06 = gr.Slider(label="OUT06", minimum=0, maximum=1, step=0.01, value=0.5)
+                    ou05 = gr.Slider(label="OUT05", minimum=0, maximum=1, step=0.01, value=0.5)
+                    ou04 = gr.Slider(label="OUT04", minimum=0, maximum=1, step=0.01, value=0.5)
+                    ou03 = gr.Slider(label="OUT03", minimum=0, maximum=1, step=0.01, value=0.5)
+                    ou02 = gr.Slider(label="OUT02", minimum=0, maximum=1, step=0.01, value=0.5)
+                    ou01 = gr.Slider(label="OUT01", minimum=0, maximum=1, step=0.01, value=0.5)
+                    ou00 = gr.Slider(label="OUT00", minimum=0, maximum=1, step=0.01, value=0.5)
 
         with gr.Row():
             gr.HTML(value="<p> exampls: Change base alpha from 0.1 to 0.9 <br>0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9<br>If you want to display the original model as well for comparison<br>0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1</p>")
@@ -137,20 +153,65 @@ def on_ui_tabs():
             loadcachelist = gr.Button(elem_id="model_merger_merge", value="Reload Cache List",variant='primary')
 
             merge.click(
-                fn=mergen,
-                inputs=[weights_a,weights_b,model_a,model_b,model_c,device,base_alpha,base_beta,custom_name,mode,overwrite,save,useblocks],
-                outputs=[submit_result,currentmodel]
+                fn=wrap_gradio_gpu_call(mergen, extra_outputs=[gr.update()]),
+                _js="supermerger_mergen",
+                inputs=[
+                    dummy_component,
+                    weights_a,
+                    weights_b,
+                    model_a,
+                    model_b,
+                    model_c,
+                    device,
+                    base_alpha,
+                    base_beta,
+                    custom_name,
+                    mode,overwrite,
+                    save,
+                    useblocks,
+                    radio_position_ids
+                ],
+                outputs=[
+                    currentmodel,
+                    submit_result
+                ]
             )
 
             mergeandgen.click(
-                fn=mergen,
-                inputs=[weights_a,weights_b,model_a,model_b,model_c,device,base_alpha,base_beta,custom_name,mode,overwrite,save,useblocks,*gensets.txt2img_preview_params,currentmodel],
-                outputs=[submit_result,merge_gallery,merge_generation_info,merge_html_info,merge_html_log,currentmodel]
+                fn=wrap_gradio_gpu_call(mergen, extra_outputs=[gr.update() for _ in range(5)]),
+                _js="supermerger_mergen",
+                inputs=[
+                    dummy_component,
+                    weights_a,
+                    weights_b,
+                    model_a,
+                    model_b,
+                    model_c,
+                    device,
+                    base_alpha,
+                    base_beta,
+                    custom_name,
+                    mode,
+                    overwrite,
+                    save,
+                    useblocks,
+                    radio_position_ids,
+                    *gensets.txt2img_preview_params,
+                    currentmodel
+                ],
+                outputs=[
+                    currentmodel,
+                    merge_gallery,
+                    merge_generation_info,
+                    merge_html_info,
+                    merge_html_log,
+                    submit_result
+                ]
             )
 
             gen.click(
-                fn=runrun,
-                inputs=[*gensets.txt2img_preview_params,currentmodel],
+                fn=wrap_gradio_gpu_call(runrun),
+                inputs=[dummy_component, *gensets.txt2img_preview_params,currentmodel],
                 outputs=[merge_gallery,merge_generation_info,merge_html_info,merge_html_log],
             )
 
@@ -208,6 +269,38 @@ def on_ui_tabs():
             y_type.change(fn=showxy,inputs=[y_type], outputs=[checkpoints,modelnames,addtox,addtoy,ygrid])
             checkpoints.change(fn=lambda x:",".join(x),inputs=[checkpoints],outputs=[modelnames])
             x_randseednum.change(fn=makerand,inputs=[x_randseednum],outputs=[xgrid])
+        
+        def on_btn_apply_block_weight_from_txt(txt_block_weight):
+            if not txt_block_weight or txt_block_weight == "":
+                return [gr.update() for _ in range(25)]
+            _list = [x.strip() for x in txt_block_weight.split(",")]
+            if(len(_list) != 25):
+                return [gr.update() for _ in range(25)]
+            return [gr.update(value=x) for x in _list]
+        btn_apply_block_weithg_from_txt.click(
+            fn=on_btn_apply_block_weight_from_txt,
+            inputs=[txt_block_weight],
+            outputs=[
+                in00, in01, in02, in03, in04, in05, in06, in07, in08, in09, in10, in11,
+                mi00,
+                ou00, ou01, ou02, ou03, ou04, ou05, ou06, ou07, ou08, ou09, ou10, ou11,
+            ]
+        )
+
+        def on_change_dd_preset_weight(dd_preset_weight):
+            _weights = presetWeights.find_weight_by_name(dd_preset_weight)
+            _ret = on_btn_apply_block_weight_from_txt(_weights)
+            return [gr.update(value=_weights)] + _ret
+        dd_preset_weight.change(
+            fn=on_change_dd_preset_weight,
+            inputs=[dd_preset_weight],
+            outputs=[
+                txt_block_weight,
+                in00, in01, in02, in03, in04, in05, in06, in07, in08, in09, in10, in11,
+                mi00,
+                ou00, ou01, ou02, ou03, ou04, ou05, ou06, ou07, ou08, ou09, ou10, ou11,
+            ]
+        )
 
     return [(ui, "SuperMerger", "SuperMerger")]
 
