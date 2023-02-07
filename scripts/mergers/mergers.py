@@ -537,7 +537,7 @@ def savemerged(output_file,overwrite):
     mergedmodel[8] = output_file
     mergedmodel[10] = overwrite
 
-    return mergen(*mergedmodel)
+    return mergen("", *mergedmodel)
 
 def savemodel(state_dict,currentmodel,output_file,overwrite):
     if not output_file or output_file == "":
