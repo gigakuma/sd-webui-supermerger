@@ -302,7 +302,7 @@ def on_ui_tabs():
             ]
         )
 
-    return [(ui, "SuperMerger", "SuperMerger")]
+    return [(ui, "SuperMerger-prog", "SuperMerger-prog")]
 
 def add_to_seq(seq,maker):
     return gr.Textbox.update(value = maker if seq=="" else seq+"\r\n"+maker)
